@@ -8,7 +8,6 @@ from werkzeug.datastructures import  FileStorage
 from App.database import init_db
 from App.config import load_config
 
-
 from App.controllers import (
     setup_jwt,
     add_auth_context
@@ -16,26 +15,24 @@ from App.controllers import (
 
 from App.views import views, setup_admin
 
-
-
 def add_views(app):
     for view in views:
         app.register_blueprint(view)
 
-def create_app(overrides={}):
-    app = Flask(__name__, static_url_path='/static')
-    load_config(app, overrides)
-    CORS(app)
+# Delegate to the app factory and keep a global app context for tests
+from . import create_app as _create_app
+from .database import bind_app
+
+def create_app(config_overrides=None):
+    app = _create_app(config_overrides)
+
+    # Ensure JWT is configured for tests that call create_access_token
+    if not app.config.get("JWT_SECRET_KEY"):
+        app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", "dev-secret")
+    setup_jwt(app)
     add_auth_context(app)
-    photos = UploadSet('photos', TEXT + DOCUMENTS + IMAGES)
-    configure_uploads(app, photos)
-    add_views(app)
-    init_db(app)
-    jwt = setup_jwt(app)
-    setup_admin(app)
-    @jwt.invalid_token_loader
-    @jwt.unauthorized_loader
-    def custom_unauthorized_response(error):
-        return render_template('401.html', error=error), 401
+
+    bind_app(app)
+    # Push a context so tests calling db.* without context still work
     app.app_context().push()
     return app

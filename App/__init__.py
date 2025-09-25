@@ -1,5 +1,5 @@
 from flask import Flask
-from .database import db
+from .database import db, bind_app
 from .config import load_config  # uses default_config.py in dev (per template)
 
 def create_app(config_overrides=None):
@@ -12,10 +12,12 @@ def create_app(config_overrides=None):
         app.config.update(cfg)
 
     db.init_app(app)
+    bind_app(app)
 
     with app.app_context():
-        # import models so SQLAlchemy sees them, then create tables
+        # import both model modules so SQLAlchemy sees them, then create tables
         from .models import core  # noqa: F401
+        from .models import user as user_models  # noqa: F401
         db.create_all()
 
     return app

@@ -5,19 +5,40 @@ from sqlalchemy import MetaData
 
 db = SQLAlchemy()
 
+# Keep a reference to the last created/bound Flask app
+_bound_app = None
+
+def bind_app(app):
+    global _bound_app
+    _bound_app = app
+
+def _resolve_app(app):
+    # Prefer explicit app, otherwise use bound app
+    return app or _bound_app
+
 def create_db(app=None, *, drop=False):
     """
     Create tables. If drop=True, drop all first.
+    If no app passed, uses the last bound app.
     """
-    ctx = app.app_context() if app else None
-    if ctx: ctx.push()
+    app = _resolve_app(app)
+    if app is None:
+        raise RuntimeError("No Flask app bound. Call create_app(...) first.")
+    ctx = app.app_context()
+    ctx.push()
     try:
-        from .models import core  # ensure models are imported
+        # Ensure all models are imported so mappers are registered
+        from .models import core  # noqa: F401
+        from .models import user as user_models  # noqa: F401
         if drop:
             db.drop_all()
         db.create_all()
     finally:
-        if ctx: ctx.pop()
+        ctx.pop()
+
+# Back-compat for tests importing init_db
+def init_db(app=None, *, drop=False):
+    return create_db(app=app, drop=drop)
 
 def reset_db(app, *, hard=False):
     """
@@ -26,7 +47,6 @@ def reset_db(app, *, hard=False):
     ctx = app.app_context()
     ctx.push()
     try:
-        # drop via reflection to catch stale tables
         meta = MetaData()
         meta.reflect(bind=db.engine)
         meta.drop_all(bind=db.engine)
