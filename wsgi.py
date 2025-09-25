@@ -1,4 +1,7 @@
-import click, sys, json, os
+import os
+import json
+import click
+from functools import wraps
 from flask.cli import AppGroup, with_appcontext
 from App import create_app
 from App.database import db
@@ -9,22 +12,33 @@ from App.controllers import leave_controller as leave
 from App.controllers import swap_controller as swap
 from App.controllers import notify_controller as notify
 from App.controllers import payroll_controller as payroll
-from functools import wraps
 
 app = create_app()
 
-# -------- tiny demo login stored in .session.json (optional polish) --------
+# -------- session helpers for demo CLI auth --------
 SESSION_FILE = ".session.json"
-def _session_get(): 
-    if not os.path.exists(SESSION_FILE): return None
-    try: return json.load(open(SESSION_FILE)).get("email")
-    except Exception: return None
-def _session_set(email): open(SESSION_FILE, "w").write(json.dumps({"email": email}))
-def _session_clear(): 
-    if os.path.exists(SESSION_FILE): os.remove(SESSION_FILE)
-def _current_user(): 
+
+def _session_get():
+    if not os.path.exists(SESSION_FILE):
+        return None
+    try:
+        with open(SESSION_FILE) as f:
+            return json.load(f).get("email")
+    except Exception:
+        return None
+
+def _session_set(email):
+    with open(SESSION_FILE, "w") as f:
+        json.dump({"email": email}, f)
+
+def _session_clear():
+    if os.path.exists(SESSION_FILE):
+        os.remove(SESSION_FILE)
+
+def _current_user():
     email = _session_get()
     return User.query.filter_by(email=email).first() if email else None
+
 def require_roles(*roles):
     def deco(fn):
         @wraps(fn)
@@ -38,7 +52,7 @@ def require_roles(*roles):
         return wrapper
     return deco
 
-# -------------------- CLI Groups (template style) --------------------
+# -------------------- CLI Groups --------------------
 init = AppGroup('init', help='DB init & seed')
 user_cli = AppGroup('user', help='User/staff admin')
 roster_cli = AppGroup('roster', help='Roster & attendance')
@@ -46,7 +60,6 @@ leave_cli = AppGroup('leave', help='Leave requests')
 swap_cli = AppGroup('swap', help='Shift swaps')
 notify_cli = AppGroup('notify', help='Notifications')
 payroll_cli = AppGroup('payroll', help='Payroll')
-
 auth_cli = AppGroup('auth', help='Demo login')
 
 @auth_cli.command('login')
@@ -81,17 +94,19 @@ def init_db(drop):
 @with_appcontext
 def seed():
     # users
-    def ensure(name,email,role):
+    def ensure(name, email, role):
         if not User.query.filter_by(email=email).first():
-            u = User(name=name,email=email,role=role)
+            u = User(name=name, email=email, role=role)
             u.set_password("pass")
             db.session.add(u)
+
     ensure('Admin','admin@example.com','admin')
     ensure('Supervisor','supervisor@example.com','supervisor')
     ensure('HR Clerk','hr@example.com','hr')
-    for i in range(1,4):
+    for i in range(1, 4):
         ensure(f'Staff {i}', f'staff{i}@example.com', 'staff')
     db.session.commit()
+
     # pay rates for staff
     for u in User.query.filter_by(role='staff').all():
         if not PayRate.query.filter_by(user_id=u.id).first():
@@ -118,7 +133,7 @@ app.cli.add_command(user_cli)
 @click.argument('email')
 @click.argument('start_iso')
 @click.argument('end_iso')
-@require_roles('admin','supervisor')
+@require_roles('admin', 'supervisor')
 @with_appcontext
 def assign(email, start_iso, end_iso):
     sh = admin.assign_shift(email, start_iso, end_iso)
@@ -127,7 +142,7 @@ def assign(email, start_iso, end_iso):
 @roster_cli.command('view')
 @with_appcontext
 def view():
-    for sh in staff.view_roster():
+    for sh in Shift.query.order_by(Shift.start_time).all():
         click.echo(f"#{sh.id} {sh.user.email} {sh.start_time} → {sh.end_time} [{sh.status}]")
 
 @roster_cli.command('clock-in')
@@ -163,7 +178,7 @@ def leave_create(requester_email, start_date, end_date, leave_type, reason):
     click.echo(f"Leave #{lr.id} [{lr.status}] {start_date}→{end_date}")
 
 @leave_cli.command('decide')
-@require_roles('admin','supervisor')
+@require_roles('admin', 'supervisor')
 @click.argument('leave_id', type=int)
 @click.argument('approver_email')
 @click.argument('decision')
@@ -186,7 +201,7 @@ def swap_request(from_email, shift_id, to_email, note):
     click.echo(f"Swap #{sr.id} from {from_email} -> {to_email} for shift #{shift_id}")
 
 @swap_cli.command('decide')
-@require_roles('admin','supervisor')
+@require_roles('admin', 'supervisor')
 @click.argument('swap_id', type=int)
 @click.argument('approver_email')
 @click.argument('decision')
@@ -198,7 +213,7 @@ def swap_decide(swap_id, approver_email, decision):
 app.cli.add_command(swap_cli)
 
 @notify_cli.command('send')
-@require_roles('admin','supervisor','hr')
+@require_roles('admin', 'supervisor', 'hr')
 @click.argument('recipient_email')
 @click.argument('message')
 @click.option('--channel', default='inapp')
@@ -212,7 +227,7 @@ def notify_send(recipient_email, message, channel, etype, eid):
 app.cli.add_command(notify_cli)
 
 @payroll_cli.command('run')
-@require_roles('admin','hr')
+@require_roles('admin', 'hr')
 @click.argument('period_start')
 @click.argument('period_end')
 @click.argument('admin_email')
