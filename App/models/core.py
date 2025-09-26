@@ -125,35 +125,3 @@ class Notification(db.Model):
     read = db.Column(db.Boolean, default=False)
 
     recipient = db.relationship("App.models.core.User", backref="notifications")
-
-# ===== Payroll =====
-class PayRate(db.Model):
-    __tablename__ = "pay_rates"
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, unique=True)
-    hourly_rate = db.Column(db.Numeric(10, 2), nullable=False)
-    effective_from = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-
-    user = db.relationship("App.models.core.User", backref="pay_rate")
-
-class PayrollRun(db.Model):
-    __tablename__ = "payroll_runs"
-    id = db.Column(db.Integer, primary_key=True)
-    period_start = db.Column(db.Date, nullable=False)
-    period_end = db.Column(db.Date, nullable=False)
-    admin_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
-    status = db.Column(db.String(20), default="draft")
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-    admin = db.relationship("App.models.core.User", backref="payroll_runs")
-    lines = db.relationship("PayrollLine", backref="run", lazy=True, cascade="all, delete-orphan")
-
-class PayrollLine(db.Model):
-    __tablename__ = "payroll_lines"
-    id = db.Column(db.Integer, primary_key=True)
-    run_id = db.Column(db.Integer, db.ForeignKey("payroll_runs.id"), nullable=False)
-    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
-    total_minutes = db.Column(db.Integer, default=0, nullable=False)
-    gross_pay = db.Column(db.Numeric(12, 2), default=0, nullable=False)
-
-    user = db.relationship("App.models.core.User", backref="payroll_lines")

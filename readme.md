@@ -1,188 +1,120 @@
-![Tests](https://github.com/uwidcit/flaskmvc/actions/workflows/dev.yml/badge.svg)
+# Rostering App
 
-# Flask MVC Template
-A template for flask applications structured in the Model View Controller pattern [Demo](https://dcit-flaskmvc.herokuapp.com/). [Postman Collection](https://documenter.getpostman.com/view/583570/2s83zcTnEJ)
+A Flask-based rostering, attendance, leave, swap, and notification demo. All operations are available via the Flask CLI.
 
+## Quick Start
 
-# Dependencies
-* Python3/pip3
-* Packages listed in requirements.txt
+1. **Install dependencies**
+   pip install -r requirements.txt
 
-# Installing Dependencies
-```bash
-$ pip install -r requirements.txt
-```
+2. **Initialize the database and seed demo data**
+   flask init db
+   flask init seed
 
-# Configuration Management
+3. **Run the web server**
+   flask run
 
+## CLI Commands & Examples
 
-Configuration information such as the database url/port, credentials, API keys etc are to be supplied to the application. However, it is bad practice to stage production information in publicly visible repositories.
-Instead, all config is provided by a config file or via [environment variables](https://linuxize.com/post/how-to-set-and-list-environment-variables-in-linux/).
+### 1. Auth Commands
 
-## In Development
+- **Login**
+  flask auth login admin@example.com pass
+- **Logout**
+  flask auth logout
 
-When running the project in a development environment (such as gitpod) the app is configured via default_config.py file in the App folder. By default, the config for development uses a sqlite database.
+### 2. User Management
 
-default_config.py
-```python
-SQLALCHEMY_DATABASE_URI = "sqlite:///temp-database.db"
-SECRET_KEY = "secret key"
-JWT_ACCESS_TOKEN_EXPIRES = 7
-ENV = "DEVELOPMENT"
-```
+- **Create a staff user**
+  flask user create-staff "Alice Smith" alice@example.com
 
-These values would be imported and added to the app in load_config() function in config.py
+### 3. Roster & Attendance
 
-config.py
-```python
-# must be updated to inlude addtional secrets/ api keys & use a gitignored custom-config file instad
-def load_config():
-    config = {'ENV': os.environ.get('ENV', 'DEVELOPMENT')}
-    delta = 7
-    if config['ENV'] == "DEVELOPMENT":
-        from .default_config import JWT_ACCESS_TOKEN_EXPIRES, SQLALCHEMY_DATABASE_URI, SECRET_KEY
-        config['SQLALCHEMY_DATABASE_URI'] = SQLALCHEMY_DATABASE_URI
-        config['SECRET_KEY'] = SECRET_KEY
-        delta = JWT_ACCESS_TOKEN_EXPIRES
-...
-```
+- **Assign a shift**
+  flask roster assign staff1@example.com 2025-10-01T09:00 2025-10-01T17:00
+- **View all shifts**
+  flask roster view
+- **Clock in for a shift**
+  flask roster clock-in staff1@example.com 1
+- **Clock out for a shift**
+  flask roster clock-out staff1@example.com 1
+- **Weekly report (admin/supervisor)**
+  flask roster report-week 2025-10-01
 
-## In Production
+### 4. Leave Requests
 
-When deploying your application to production/staging you must pass
-in configuration information via environment tab of your render project's dashboard.
+- **Create a leave request**
+  flask leave create staff1@example.com 2025-10-03 2025-10-03 annual --reason "Personal"
+- **Approve or reject a leave request**
+  flask leave decide 1 supervisor@example.com approved
+- **List leave requests**
+  flask leave list
+  example:
+  flask leave list --status pending
+  flask leave list --email staff1@example.com
 
-![perms](./images/fig1.png)
+### 5. Shift Swaps
 
-# Flask Commands
+- **Request a shift swap**
+  flask swap request staff1@example.com 1 staff2@example.com --note "Need swap"
+- **Approve or reject a swap**
+  flask swap decide 1 supervisor@example.com approved
+- **List swap requests**
+  flask swap list
+  example:
+  flask swap list --status pending
+  flask swap list --email staff1@example.com
 
-wsgi.py is a utility script for performing various tasks related to the project. You can use it to import and test any code in the project. 
-You just need create a manager command function, for example:
+### 6. Notifications
 
-```python
-# inside wsgi.py
+- **Send a notification**
+  
+  flask notify send staff1@example.com "Your shift has changed"
+  
 
-user_cli = AppGroup('user', help='User object commands')
+## Demo Workflow
 
-@user_cli.cli.command("create-user")
-@click.argument("username")
-@click.argument("password")
-def create_user_command(username, password):
-    create_user(username, password)
-    print(f'{username} created!')
+1. **Assign a shift as admin**
+   flask auth login admin@example.com pass
+   flask roster assign staff1@example.com 2025-10-01T09:00 2025-10-01T17:00
+   flask auth logout
 
-app.cli.add_command(user_cli) # add the group to the cli
+2. **Staff clocks in/out at start/end of shift**
+   flask auth login staff1@example.com pass
+   flask roster clock-in staff1@example.com 1
+   flask roster clock-out staff1@example.com 1
+   flask auth logout
 
-```
+3. **Leave request and approval**
+   flask auth login staff1@example.com pass
+   flask leave create staff1@example.com 2025-10-03 2025-10-03 annual --reason "Personal"
+   flask auth logout
 
-Then execute the command invoking with flask cli with command name and the relevant parameters
+   flask auth login supervisor@example.com pass
+   flask leave decide 1 supervisor@example.com approved
+   flask auth logout
 
-```bash
-$ flask user create bob bobpass
-```
+4. **Swap a shift**
+   flask auth login staff1@example.com pass
+   flask swap request staff1@example.com 1 staff2@example.com --note "Need swap"
+   flask auth logout
 
+   flask auth login supervisor@example.com pass
+   flask swap decide 1 supervisor@example.com approved
+   flask auth logout
 
-# Running the Project
+5. **Weekly report**
+   flask auth login admin@example.com pass
+   flask roster report-week 2025-10-01
+   flask auth logout
 
-_For development run the serve command (what you execute):_
-```bash
-$ flask run
-```
+## Testing
 
-_For production using gunicorn (what the production server executes):_
-```bash
-$ gunicorn wsgi:app
-```
+Run all tests:
+pytest
 
-# Deploying
-You can deploy your version of this app to render by clicking on the "Deploy to Render" link above.
+## Notes
 
-# Initializing the Database
-When connecting the project to a fresh empty database ensure the appropriate configuration is set then file then run the following command. This must also be executed once when running the app on heroku by opening the heroku console, executing bash and running the command in the dyno.
-
-```bash
-$ flask init
-```
-
-# Database Migrations
-If changes to the models are made, the database must be'migrated' so that it can be synced with the new models.
-Then execute following commands using manage.py. More info [here](https://flask-migrate.readthedocs.io/en/latest/)
-
-```bash
-$ flask db init
-$ flask db migrate
-$ flask db upgrade
-$ flask db --help
-```
-
-# Testing
-
-## Unit & Integration
-Unit and Integration tests are created in the App/test. You can then create commands to run them. Look at the unit test command in wsgi.py for example
-
-```python
-@test.command("user", help="Run User tests")
-@click.argument("type", default="all")
-def user_tests_command(type):
-    if type == "unit":
-        sys.exit(pytest.main(["-k", "UserUnitTests"]))
-    elif type == "int":
-        sys.exit(pytest.main(["-k", "UserIntegrationTests"]))
-    else:
-        sys.exit(pytest.main(["-k", "User"]))
-```
-
-You can then execute all user tests as follows
-
-```bash
-$ flask test user
-```
-
-You can also supply "unit" or "int" at the end of the comand to execute only unit or integration tests.
-
-You can run all application tests with the following command
-
-```bash
-$ pytest
-```
-
-## Test Coverage
-
-You can generate a report on your test coverage via the following command
-
-```bash
-$ coverage report
-```
-
-You can also generate a detailed html report in a directory named htmlcov with the following comand
-
-```bash
-$ coverage html
-```
-
-# Troubleshooting
-
-## Views 404ing
-
-If your newly created views are returning 404 ensure that they are added to the list in main.py.
-
-```python
-from App.views import (
-    user_views,
-    index_views
-)
-
-# New views must be imported and added to this list
-views = [
-    user_views,
-    index_views
-]
-```
-
-## Cannot Update Workflow file
-
-If you are running into errors in gitpod when updateding your github actions file, ensure your [github permissions](https://gitpod.io/integrations) in gitpod has workflow enabled ![perms](./images/gitperms.png)
-
-## Database Issues
-
-If you are adding models you may need to migrate the database with the commands given in the previous database migration section. Alternateively you can delete you database file.
+- Default demo users: admin@example.com, supervisor@example.com, hr@example.com, staff1@example.com, staff2@example.com, staff3@example.com (password: `pass`)
+- All commands are idempotent and safe to re-run.
+- For more help, use `flask <group> --help` (e.g., `flask roster --help`).

@@ -4,14 +4,15 @@ import click
 from functools import wraps
 from flask.cli import AppGroup, with_appcontext
 from App import create_app
+from App.models.core import LeaveRequest, SwapRequest, User, Shift, TimeLog
+from sqlalchemy import or_ 
 from App.database import db
-from App.models.core import User, Shift, TimeLog, PayRate
 from App.controllers import admin_controller as admin
 from App.controllers import staff_controller as staff
 from App.controllers import leave_controller as leave
 from App.controllers import swap_controller as swap
 from App.controllers import notify_controller as notify
-from App.controllers import payroll_controller as payroll
+from datetime import datetime, timedelta
 
 app = create_app()
 
@@ -59,7 +60,6 @@ roster_cli = AppGroup('roster', help='Roster & attendance')
 leave_cli = AppGroup('leave', help='Leave requests')
 swap_cli = AppGroup('swap', help='Shift swaps')
 notify_cli = AppGroup('notify', help='Notifications')
-payroll_cli = AppGroup('payroll', help='Payroll')
 auth_cli = AppGroup('auth', help='Demo login')
 
 @auth_cli.command('login')
@@ -93,7 +93,7 @@ def init_db(drop):
 @init.command('seed')
 @with_appcontext
 def seed():
-    # users
+    # users only (no payroll)
     def ensure(name, email, role):
         if not User.query.filter_by(email=email).first():
             u = User(name=name, email=email, role=role)
@@ -106,13 +106,7 @@ def seed():
     for i in range(1, 4):
         ensure(f'Staff {i}', f'staff{i}@example.com', 'staff')
     db.session.commit()
-
-    # pay rates for staff
-    for u in User.query.filter_by(role='staff').all():
-        if not PayRate.query.filter_by(user_id=u.id).first():
-            db.session.add(PayRate(user_id=u.id, hourly_rate=20.00))
-    db.session.commit()
-    click.echo("Seeded users (password = 'pass') and pay rates.")
+    click.echo("Seeded users (password = 'pass').")
 
 app.cli.add_command(init)
 
@@ -163,6 +157,62 @@ def clock_out(email, timelog_id):
     tl = staff.clock_out(email, timelog_id)
     click.echo(f"Clock-out #{tl.id} at {tl.clock_out}")
 
+@roster_cli.command('report-week')
+@require_roles('admin', 'supervisor')
+@click.argument('week_start')  # e.g., 2025-10-01
+@with_appcontext
+def report_week(week_start):
+    start_dt = datetime.fromisoformat(f"{week_start}T00:00:00")
+    end_dt = start_dt + timedelta(days=7) - timedelta(seconds=1)
+
+    # Shifts in the week
+    shifts = (Shift.query
+              .filter(Shift.start_time >= start_dt, Shift.end_time <= end_dt)
+              .all())
+
+    # Aggregate shift counts per user
+    stats = {}
+    def ensure(uid):
+        if uid not in stats:
+            u = User.query.get(uid)
+            stats[uid] = {
+                "name": (u.name if u else f"User {uid}"),
+                "scheduled": 0,
+                "completed": 0,
+                "missed": 0,
+                "worked_minutes": 0,
+            }
+
+    for sh in shifts:
+        ensure(sh.user_id)
+        stats[sh.user_id]["scheduled"] += 1
+        if sh.status == "completed":
+            stats[sh.user_id]["completed"] += 1
+        elif sh.status == "missed":
+            stats[sh.user_id]["missed"] += 1
+
+    # Worked minutes from timelogs for the week
+    logs = (TimeLog.query
+            .filter(TimeLog.clock_out != None)  # noqa: E711
+            .filter(TimeLog.clock_in >= start_dt, TimeLog.clock_out <= end_dt)
+            .all())
+
+    for tl in logs:
+        ensure(tl.user_id)
+        mins = 0
+        if tl.clock_in and tl.clock_out and tl.clock_out > tl.clock_in:
+            mins = int((tl.clock_out - tl.clock_in).total_seconds() // 60)
+        stats[tl.user_id]["worked_minutes"] += max(0, mins)
+
+    # Print
+    click.echo(f"Weekly report {week_start} to {(start_dt + timedelta(days=6)).date()}")
+    if not stats:
+        click.echo("No data.")
+        return
+    for uid, row in sorted(stats.items(), key=lambda kv: kv[1]["name"].lower()):
+        hours = row["worked_minutes"] / 60.0
+        click.echo(f"- {row['name']}: scheduled={row['scheduled']} completed={row['completed']} missed={row['missed']} worked_hours={hours:.2f}")
+
 app.cli.add_command(roster_cli)
 
 @leave_cli.command('create')
@@ -187,6 +237,32 @@ def leave_decide(leave_id, approver_email, decision):
     lr = leave.decide_leave(leave_id, approver_email, decision)
     click.echo(f"Leave #{lr.id} now {lr.status}")
 
+@leave_cli.command('list')
+@click.option('--status', default=None, help='pending/approved/rejected/cancelled')
+@click.option('--email', default=None, help='Filter by requester email')
+def leave_list(status, email):
+    q = LeaveRequest.query
+    if status:
+        q = q.filter_by(status=status)
+    if email:
+        u = User.query.filter_by(email=email).first()
+        if not u:
+            click.echo("No such user"); return
+        q = q.filter_by(requester_id=u.id)
+
+    rows = q.order_by(LeaveRequest.id.asc()).all()
+    if not rows:
+        click.echo("No leave requests found"); return
+
+    for lr in rows:
+        req = User.query.get(lr.requester_id)
+        appr = User.query.get(lr.approver_id) if lr.approver_id else None
+        click.echo(
+            f"#{lr.id} {lr.start_date}→{lr.end_date} {lr.type:6} "
+            f"[{lr.status}] requester={req.email} approver={(appr.email if appr else '-')}"
+        )
+
+
 app.cli.add_command(leave_cli)
 
 @swap_cli.command('request')
@@ -210,6 +286,34 @@ def swap_decide(swap_id, approver_email, decision):
     sr = swap.approve_swap(swap_id, approver_email, decision)
     click.echo(f"Swap #{sr.id} now {sr.status}")
 
+@swap_cli.command('list')
+@click.option('--status', default=None, help='pending/approved/rejected/cancelled')
+@click.option('--email', default=None, help='Filter by user email (requester or target)')
+def swap_list(status, email):
+    q = SwapRequest.query
+    if status:
+        q = q.filter_by(status=status)
+    if email:
+        u = User.query.filter_by(email=email).first()
+        if not u:
+            click.echo("No such user"); return
+        q = q.filter(or_(SwapRequest.from_user_id == u.id,
+                         SwapRequest.to_user_id == u.id))
+
+    rows = q.order_by(SwapRequest.id.asc()).all()
+    if not rows:
+        click.echo("No swap requests found"); return
+
+    for sr in rows:
+        from_u = User.query.get(sr.from_user_id)
+        to_u = User.query.get(sr.to_user_id)
+        sh = Shift.query.get(sr.shift_id)
+        when = (sh.start_time.strftime("%Y-%m-%d %H:%M") if sh and sh.start_time else "")
+        click.echo(
+            f"#{sr.id} shift={sr.shift_id} {when} "
+            f"[{sr.status}] from={from_u.email} -> to={to_u.email} note={sr.note or ''}"
+        )
+
 app.cli.add_command(swap_cli)
 
 @notify_cli.command('send')
@@ -225,21 +329,6 @@ def notify_send(recipient_email, message, channel, etype, eid):
     click.echo(f"Notification #{n.id} to {recipient_email} [{channel}]")
 
 app.cli.add_command(notify_cli)
-
-@payroll_cli.command('run')
-@require_roles('admin', 'hr')
-@click.argument('period_start')
-@click.argument('period_end')
-@click.argument('admin_email')
-@with_appcontext
-def payroll_run(period_start, period_end, admin_email):
-    run = payroll.create_payroll_run(period_start, period_end, admin_email)
-    run = payroll.generate_lines(run.id)
-    click.echo(f"Payroll #{run.id} {run.period_start}→{run.period_end} status={run.status}")
-    for line in run.lines:
-        click.echo(f"  {line.user.email}: minutes={line.total_minutes} gross=${line.gross_pay}")
-
-app.cli.add_command(payroll_cli)
 
 if __name__ == "__main__":
     app.run()
